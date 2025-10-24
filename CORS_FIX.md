@@ -17,6 +17,7 @@ const response = await fetch(`https://${domain}`);
 
 **After (✅ Works with fallbacks!)**:
 ```typescript
+
 const corsProxies = [
   `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
   `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`,
