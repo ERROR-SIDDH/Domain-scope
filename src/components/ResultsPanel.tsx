@@ -29,10 +29,37 @@ interface Result {
 
 interface ResultsPanelProps {
   results: Result[];
+  metascraperResults?: any[];
+  virusTotalResults?: any[];
 }
 
-const ResultsPanel = ({ results }: ResultsPanelProps) => {
+const ResultsPanel = ({ results, metascraperResults = [], virusTotalResults = [] }: ResultsPanelProps) => {
   const { toast } = useToast();
+
+  const csvEscape = (val: any) => {
+    if (val === null || val === undefined) return "";
+    let s = String(val);
+    // Escape quotes
+    s = s.replace(/"/g, '""');
+    // Wrap if contains comma, quote, or newline
+    if (/[",\n]/.test(s)) {
+      s = `"${s}"`;
+    }
+    return s;
+  };
+
+  const buildDomainIndex = () => {
+    const map = new Map<string, { backend?: any; meta?: any; vt?: any; order: number }>();
+    let order = 0;
+    const visit = (d?: string) => {
+      if (!d) return;
+      if (!map.has(d)) map.set(d, { order: order++ });
+    };
+    for (const r of results) { visit(r?.domain); if (r?.domain) map.get(r.domain)!.backend = r; }
+    for (const r of metascraperResults) { visit(r?.domain); if (r?.domain) map.get(r.domain)!.meta = r; }
+    for (const r of virusTotalResults) { visit(r?.domain); if (r?.domain) map.get(r.domain)!.vt = r; }
+    return Array.from(map.entries()).sort((a,b)=>a[1].order-b[1].order);
+  };
 
   const exportToCsv = () => {
     if (results.length === 0) {
@@ -45,34 +72,70 @@ const ResultsPanel = ({ results }: ResultsPanelProps) => {
     }
 
     const headers = [
-      "domain", "created", "expires", "domain_age", "registrar", 
-      "name_servers", "dns_records", "asn", "abuse_score", "is_vpn_proxy",
-      "ip_address", "country", "region", "city", "longitude", "latitude", "isp", "timestamp"
+      // Backend
+      "domain","created","expires","domain_age","registrar","name_servers","dns_records","asn","abuse_score","is_vpn_proxy","ip_address","country","region","city","longitude","latitude","isp","timestamp",
+      // Metascraper
+      "ms_title","ms_description","ms_publisher","ms_type","ms_url","ms_lang","ms_author","ms_date","ms_category","ms_tags","ms_image","ms_favicon","ms_completeness",
+      // VirusTotal
+      "vt_risk_level","vt_reputation","vt_malicious","vt_suspicious","vt_harmless","vt_undetected","vt_votes_harmless","vt_votes_malicious","vt_categories"
     ];
-    
-    const csvContent = [
-      headers.join(","),
-      ...results.map(result => [
-        result.domain,
-        result.created,
-        result.expires,
-        result.domain_age,
-        result.registrar,
-        result.name_servers.join("; "),
-        result.dns_records || "-",
-        result.asn || "-",
-        result.abuse_score,
-        result.is_vpn_proxy,
-        result.ip_address,
-        result.country,
-        result.region || "-",
-        result.city || "-",
-        result.longitude || "-",
-        result.latitude || "-",
-        result.isp,
-        result.timestamp
-      ].join(","))
-    ].join("\n");
+
+    const domains = buildDomainIndex();
+    const rows = domains.map(([, rec]) => {
+      const b = rec.backend || {};
+      const m = rec.meta || {};
+      const v = rec.vt || {};
+      const vtStats = v.last_analysis_stats || {};
+      const vtVotes = v.total_votes || {};
+      const vtCats = v.categories ? Object.entries(v.categories).map(([k, val]) => `${k}:${val}`).join("; ") : "-";
+      const row = [
+        b.domain,
+        b.created,
+        b.expires,
+        b.domain_age,
+        b.registrar,
+        Array.isArray(b.name_servers) ? b.name_servers.join("; ") : b.name_servers,
+        b.dns_records || "-",
+        b.asn || "-",
+        b.abuse_score,
+        b.is_vpn_proxy,
+        b.ip_address,
+        b.country,
+        b.region || "-",
+        b.city || "-",
+        b.longitude || "-",
+        b.latitude || "-",
+        b.isp,
+        b.timestamp,
+        // metascraper
+        m.title,
+        m.description,
+        m.publisher,
+        m.type,
+        m.url,
+        m.lang,
+        m.author,
+        m.date,
+        m.category,
+        Array.isArray(m.tags) ? m.tags.join("; ") : m.tags,
+        m.image,
+        m.favicon,
+        m.completenessScore,
+        // virustotal
+        v.risk_level,
+        v.reputation,
+        vtStats.malicious,
+        vtStats.suspicious,
+        vtStats.harmless,
+        vtStats.undetected,
+        vtVotes.harmless,
+        vtVotes.malicious,
+        vtCats,
+      ];
+      return row.map(csvEscape).join(",");
+    });
+
+    const csvContent = [headers.join(","), ...rows].join("\n");
 
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);

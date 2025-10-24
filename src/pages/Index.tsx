@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Shield, Search, Database, FileText, Globe, Activity, Moon, Sun, CheckCircle, XCircle } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { exportLatestReport, exportAllReports } from "@/lib/exportPdf";
 import DomainAnalysisCard from "@/components/DomainAnalysisCard";
 import BulkScannerCard from "@/components/BulkScannerCard";
 import ResultsPanel from "@/components/ResultsPanel";
@@ -18,6 +20,7 @@ const Index = () => {
   const [virusTotalResults, setVirusTotalResults] = useState([]);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [apiStatus, setApiStatus] = useState({ backend: null, virustotal: null });
+  const { toast } = useToast();
   // API status check
   useEffect(() => {
     const checkApis = async () => {
@@ -87,6 +90,12 @@ const Index = () => {
     setResults(prev => [newResult, ...prev]);
   };
 
+  const handleBulkReset = () => {
+    setResults([]);
+    setMetascraperResults([]);
+    setVirusTotalResults([]);
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-red-50 dark:from-slate-900 dark:via-blue-950 dark:to-red-950 transition-all duration-700">
       {/* Header */}
@@ -151,6 +160,38 @@ const Index = () => {
                 ) : (
                   <Moon className="h-4 w-4 text-blue-600" />
                 )}
+              </Button>
+              <Button
+                onClick={() => {
+                  if (activeTab === 'bulk') {
+                    if (results.length === 0 && metascraperResults.length === 0 && virusTotalResults.length === 0) {
+                      toast({ title: "Nothing to export", description: "Run a bulk scan first to generate reports.", variant: "destructive" });
+                      return;
+                    }
+                    try {
+                      exportAllReports({ backends: results, metas: metascraperResults, virustotals: virusTotalResults });
+                    } catch (e: any) {
+                      toast({ title: "Export failed", description: e?.message || "Could not create PDF", variant: "destructive" });
+                    }
+                  } else {
+                    const backend = results[0];
+                    const meta = metascraperResults[0];
+                    const vt = virusTotalResults[0];
+                    if (!backend && !meta && !vt) {
+                      toast({ title: "Nothing to export", description: "Run a scan first to generate a report.", variant: "destructive" });
+                      return;
+                    }
+                    try {
+                      exportLatestReport({ backend, metascraper: meta, virustotal: vt });
+                    } catch (e: any) {
+                      toast({ title: "Export failed", description: e?.message || "Could not create PDF", variant: "destructive" });
+                    }
+                  }
+                }}
+                variant="default"
+                className="hidden sm:inline-flex rounded-lg bg-gradient-to-r from-red-600 to-blue-600 text-white shadow hover:from-red-700 hover:to-blue-700"
+              >
+                Export Report
               </Button>
               <div className="hidden sm:block text-sm text-slate-600 dark:text-slate-400">
                 Built by <span className="font-semibold bg-gradient-to-r from-red-600 to-blue-600 bg-clip-text text-transparent">Vaishnav K & Sidharth M</span>
@@ -224,14 +265,19 @@ const Index = () => {
                 onVirusTotalResults={handleVirusTotalResults}
               />
             ) : (
-              <BulkScannerCard onResults={handleBulkResults} />
+              <BulkScannerCard 
+                onResults={handleBulkResults}
+                onMetascraperResults={handleMetascraperResults}
+                onVirusTotalResults={handleVirusTotalResults}
+                onReset={handleBulkReset}
+              />
             )}
           </div>
 
           {/* Results Panel */}
           <div className="xl:col-span-2 space-y-4 sm:space-y-6 animate-slide-in-right" style={{ animationDelay: '200ms' }}>
             {/* Backend Results */}
-            <ResultsPanel results={results} />
+            <ResultsPanel results={results} metascraperResults={metascraperResults} virusTotalResults={virusTotalResults} />
             
             {/* Metascraper Results */}
             <MetascraperResults results={metascraperResults} />

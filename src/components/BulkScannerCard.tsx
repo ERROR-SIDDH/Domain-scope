@@ -8,9 +8,12 @@ import { useToast } from "@/hooks/use-toast";
 
 interface BulkScannerCardProps {
   onResults: (result: any) => void;
+  onMetascraperResults?: (result: any) => void;
+  onVirusTotalResults?: (result: any) => void;
+  onReset?: () => void;
 }
 
-const BulkScannerCard = ({ onResults }: BulkScannerCardProps) => {
+const BulkScannerCard = ({ onResults, onMetascraperResults, onVirusTotalResults, onReset }: BulkScannerCardProps) => {
   const fetchWithTimeout = async (url: string, timeout = 15000) => {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), timeout);
@@ -52,8 +55,14 @@ const BulkScannerCard = ({ onResults }: BulkScannerCardProps) => {
       return;
     }
 
-    setIsScanning(true);
+  // Clear previous run results if parent provided reset
+  if (onReset) onReset();
+
+  setIsScanning(true);
     setScanProgress(0);
+
+    // Simple free-tier handling for VirusTotal: only process up to 4 domains to avoid rate limit
+    let vtProcessed = 0;
 
     for (let i = 0; i < domainList.length; i++) {
       const domain = domainList[i].trim();
@@ -118,6 +127,129 @@ const BulkScannerCard = ({ onResults }: BulkScannerCardProps) => {
         }
 
         onResults(result);
+
+        // ====== Metascraper (optional) ======
+        if (onMetascraperResults) {
+          try {
+            const targetUrl = `https://${domain}`;
+            const corsProxies = [
+              `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`,
+              `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`,
+              `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`,
+            ];
+            let metaResp: Response | null = null;
+            let lastErr: any = null;
+            for (const p of corsProxies) {
+              try {
+                metaResp = await fetchWithTimeout(p, 8000);
+                if (metaResp.ok) break;
+              } catch (e) {
+                lastErr = e;
+                continue;
+              }
+            }
+            if (!metaResp || !metaResp.ok) throw lastErr || new Error('All CORS proxies failed');
+
+            const html = await metaResp.text();
+            const metaData: any = { id: Date.now() + i + 1, domain, timestamp: new Date().toLocaleString() };
+            const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+            const ogTitleMatch = html.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i);
+            const twitterTitleMatch = html.match(/<meta[^>]*name=["']twitter:title["'][^>]*content=["']([^"']+)["']/i);
+            metaData.title = (ogTitleMatch?.[1] || twitterTitleMatch?.[1] || titleMatch?.[1] || '').trim();
+            const descMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i);
+            const ogDescMatch = html.match(/<meta[^>]*property=["']og:description["'][^>]*content=["']([^"']+)["']/i);
+            const twitterDescMatch = html.match(/<meta[^>]*name=["']twitter:description["'][^>]*content=["']([^"']+)["']/i);
+            metaData.description = (ogDescMatch?.[1] || twitterDescMatch?.[1] || descMatch?.[1] || '').trim();
+            const ogImage = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i);
+            const twImage = html.match(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i);
+            if (ogImage || twImage) metaData.image = (ogImage?.[1] || twImage?.[1]).trim();
+            const ogUrlMatch = html.match(/<meta[^>]*property=["']og:url["'][^>]*content=["']([^"']+)["']/i);
+            const canonicalMatch = html.match(/<link[^>]*rel=["']canonical["'][^>]*href=["']([^"']+)["']/i);
+            metaData.url = (ogUrlMatch?.[1] || canonicalMatch?.[1] || `https://${domain}`).trim();
+            const jsonLdMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi);
+            if (jsonLdMatches) {
+              try {
+                const jsonLdData = jsonLdMatches.map(script => {
+                  const content = script.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/i);
+                  if (content && content[1]) {
+                    try { return JSON.parse(content[1]); } catch { return null; }
+                  }
+                  return null;
+                }).filter(Boolean);
+                if (jsonLdData.length > 0) metaData.jsonLd = jsonLdData;
+              } catch {}
+            }
+            const totalFields = 30;
+            const filled = Object.keys(metaData).filter(k => k !== 'id' && k !== 'domain' && k !== 'timestamp' && k !== 'jsonLd' && metaData[k]).length;
+            metaData.completenessScore = Math.round((filled / totalFields) * 100);
+            onMetascraperResults(metaData);
+          } catch (metaErr: any) {
+            onMetascraperResults({ id: Date.now() + i + 1, domain, timestamp: new Date().toLocaleString(), error: metaErr?.message || 'Failed to fetch metadata' });
+          }
+        }
+
+        // ====== VirusTotal (optional & simple free-tier handling) ======
+        if (onVirusTotalResults) {
+          const vtApiKey = import.meta.env.VITE_VIRUSTOTAL_API_KEY;
+          if (!vtApiKey) {
+            onVirusTotalResults({ id: Date.now() + i + 2, domain, timestamp: new Date().toLocaleString(), error: 'VirusTotal API key not configured' });
+          } else if (vtProcessed >= 4) {
+            // Skip beyond 4 to respect free-tier 4 req/min in a single run
+            onVirusTotalResults({ id: Date.now() + i + 2, domain, timestamp: new Date().toLocaleString(), error: 'Skipped VirusTotal scan to avoid free-tier rate limit (4/min). Try scanning fewer domains or wait.' });
+          } else {
+            try {
+              const vtRes = await fetch(`https://www.virustotal.com/api/v3/domains/${domain}`, { headers: { 'x-apikey': vtApiKey } });
+              if (vtRes.status === 429) {
+                throw new Error('VirusTotal rate limit exceeded. Please wait and retry.');
+              }
+              if (!vtRes.ok) throw new Error(`VirusTotal API responded with ${vtRes.status}`);
+              const vtJson = await vtRes.json();
+              const data = vtJson.data?.attributes || {};
+              const vtResult = {
+                id: Date.now() + i + 2,
+                domain,
+                timestamp: new Date().toLocaleString(),
+                reputation: data.reputation || 0,
+                last_analysis_stats: data.last_analysis_stats || {},
+                total_votes: data.total_votes || {},
+                categories: data.categories || {},
+                popularity_ranks: data.popularity_ranks || {},
+                whois: data.whois || null,
+                whois_date: data.whois_date ? new Date(data.whois_date * 1000).toLocaleString() : null,
+                creation_date: data.creation_date ? new Date(data.creation_date * 1000).toLocaleString() : null,
+                last_update_date: data.last_update_date ? new Date(data.last_update_date * 1000).toLocaleString() : null,
+                last_modification_date: data.last_modification_date ? new Date(data.last_modification_date * 1000).toLocaleString() : null,
+                last_analysis_date: data.last_analysis_date ? new Date(data.last_analysis_date * 1000).toLocaleString() : null,
+                last_dns_records: data.last_dns_records || [],
+                last_dns_records_date: data.last_dns_records_date ? new Date(data.last_dns_records_date * 1000).toLocaleString() : null,
+                last_https_certificate: data.last_https_certificate || null,
+                last_https_certificate_date: data.last_https_certificate_date ? new Date(data.last_https_certificate_date * 1000).toLocaleString() : null,
+                tags: data.tags || [],
+                registrar: data.registrar || null,
+                jarm: data.jarm || null,
+                last_analysis_results: data.last_analysis_results || {},
+                malicious_score: data.last_analysis_stats?.malicious || 0,
+                suspicious_score: data.last_analysis_stats?.suspicious || 0,
+                harmless_score: data.last_analysis_stats?.harmless || 0,
+                undetected_score: data.last_analysis_stats?.undetected || 0,
+                risk_level: (() => {
+                  const m = data.last_analysis_stats?.malicious || 0;
+                  const s = data.last_analysis_stats?.suspicious || 0;
+                  if (m > 5) return 'High';
+                  if (m > 0 || s > 3) return 'Medium';
+                  if (s > 0) return 'Low';
+                  return 'Clean';
+                })()
+              };
+              onVirusTotalResults(vtResult);
+              vtProcessed += 1;
+              // Small delay to be gentle with API
+              await new Promise(r => setTimeout(r, 250));
+            } catch (e: any) {
+              onVirusTotalResults({ id: Date.now() + i + 2, domain, timestamp: new Date().toLocaleString(), error: e?.message || 'Failed to fetch VirusTotal data' });
+            }
+          }
+        }
       } catch (error: any) {
         toast({
           title: `Scan failed for ${domain}`,
@@ -128,8 +260,8 @@ const BulkScannerCard = ({ onResults }: BulkScannerCardProps) => {
 
       setScanProgress(((i + 1) / domainList.length) * 100);
 
-      // Optional small delay between requests to avoid overwhelming the API
-      await new Promise((r) => setTimeout(r, 300));
+  // Optional small delay between backend requests
+  await new Promise((r) => setTimeout(r, 200));
     }
 
     setIsScanning(false);

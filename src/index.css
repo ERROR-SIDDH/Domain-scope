@@ -45,6 +45,11 @@
     --sidebar-accent-foreground: 240 5.9% 10%;
     --sidebar-border: 220 13% 91%;
     --sidebar-ring: 217.2 91.2% 59.8%;
+
+    /* Scrollbar colors (light) */
+    --scrollbar-track: rgba(148, 163, 184, 0.15); /* slate-400/15 */
+    --scrollbar-thumb: rgb(203, 213, 225);       /* slate-300 */
+    --scrollbar-thumb-hover: rgb(148, 163, 184); /* slate-400 */
   }
 
   .dark {
@@ -83,6 +88,11 @@
     --sidebar-accent-foreground: 240 4.8% 95.9%;
     --sidebar-border: 240 3.7% 15.9%;
     --sidebar-ring: 217.2 91.2% 59.8%;
+
+    /* Scrollbar colors (dark) */
+    --scrollbar-track: rgba(15, 23, 42, 0.5);    /* slate-900/50 */
+    --scrollbar-thumb: rgb(71, 85, 105);         /* slate-600 */
+    --scrollbar-thumb-hover: rgb(100, 116, 139); /* slate-500 */
   }
 }
 
@@ -93,6 +103,31 @@
 
   body {
     @apply bg-background text-foreground;
+  }
+
+  /* Firefox scrollbar */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  }
+
+  /* WebKit scrollbar */
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+    border-radius: 9999px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 9999px;
+    border: 2px solid transparent; /* creates inset look */
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
   }
 }
 
