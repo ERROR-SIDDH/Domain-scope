@@ -34,7 +34,7 @@ for (const proxyUrl of corsProxies) {
 }
 ```
 
-## What Changed
+## What Changed in the project
 
 ### File: `src/components/DomainAnalysisCard.tsx`
 
